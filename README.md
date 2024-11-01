@@ -11,7 +11,7 @@ FSBroker allows you to watch for changes in the file system and handle events su
 
 ## Features
 
-- Deduplicate "Write" similar events which happen in quick succession and present them as a single unit
+- Deduplicate similar "Write" events which happen in quick succession and present them as a single unit
 - Detect proper "Rename" events, providing the old and new paths
 - Exclude common system files and directories
 - Recursively add directories to the watch list
@@ -111,15 +111,19 @@ Returns a channel that receives errors.
 Here is a list of features I would like to add in the future, please feel free to submit pull requests:
 
 - Conditional recursion for directories
+
 Currently, once you use broker.AddRecursiveWatch it will automatically add newly created directories within any of the already watched directories to the watch list. Even if said watch directory was previously added using broker.AddWatch. I would like to modify the watch map to allow for having the "recursivewatch" flag separately per watched directory, rather than globally on the entire broker.
 
 - More comprehensive system file/directory detection
+
 Currently, the list of system file/directory exclusion may not be 100% accurate. More testing and research on the detection process may be necessary.
 
 - Separate the "FSBroker.Filter" function into two separate pre-filter and post-filter
+
 Currently, FSBroker.Filter only runs while the event is being emitted out of FSNotify, before we apply any processing on it. I'd like to separate that into two different filter functions. One that runs as the event is added, and another as the event is being emitted to the user.
 
 - Testing on different operating systems
+
 I've only tested this on MacOS, I need someone to comprehensively test this on Linux and Windows.
 
 ## License
