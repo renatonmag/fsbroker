@@ -112,7 +112,7 @@ Here is a list of features I would like to add in the future, please feel free t
 
 - Conditional recursion for directories
 
-Currently, once you use broker.AddRecursiveWatch it will automatically add newly created directories within any of the already watched directories to the watch list. Even if said watch directory was previously added using broker.AddWatch. I would like to modify the watch map to allow for having the "recursivewatch" flag separately per watched directory, rather than globally on the entire broker.
+Currently, once you use FSBroker.AddRecursiveWatch it will automatically add newly created directories within any of the already watched directories to the watch list. Even if said watch directory was previously added using FSBroker.AddWatch. I would like to modify the watch map to allow for having the "recursivewatch" flag separately per watched directory, rather than globally on the entire broker.
 
 - More comprehensive system file/directory detection
 
