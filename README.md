@@ -33,31 +33,33 @@ Here is an example of how to use FS Broker:
 package main
 
 import (
-    "log"
-    "time"
+	"log"
+	"time"
+
+	"github.com/helshabini/fsbroker"
 )
 
 func main() {
-    broker, err := NewFSBroker(300*time.Millisecond, true)
-    if err != nil {
-        log.Fatalf("error creating FS Broker: %w", err)
-    }
-    defer broker.Stop()
+	broker, err := fsbroker.NewFSBroker(300*time.Millisecond, true)
+	if err != nil {
+		log.Fatalf("error creating FS Broker: %v", err)
+	}
+	defer broker.Stop()
 
-    if err := broker.AddRecursiveWatch("watch"); err != nil {
-        log.Printf("error adding watch: %w", err)
-    }
+	if err := broker.AddRecursiveWatch("watch"); err != nil {
+		log.Printf("error adding watch: %v", err)
+	}
 
-    broker.Start()
+	broker.Start()
 
-    for {
-        select {
-        case event := <-broker.Next():
-            log.Printf("fs event has occurred: type=%s, path=%s, timestamp=%s, properties=%v", event.Type, event.Path, event.Timestamp, event.Properties)
-        case error := <-broker.Error():
-            log.Printf("an error has occurred: %w", error)
-        }
-    }
+	for {
+		select {
+		case event := <-broker.Next():
+			log.Printf("fs event has occurred: type=%s, path=%s, timestamp=%s, properties=%v", event.Type.String(), event.Path, event.Timestamp, event.Properties)
+		case error := <-broker.Error():
+			log.Printf("an error has occurred: %v", error)
+		}
+	}
 }
 ```
 
