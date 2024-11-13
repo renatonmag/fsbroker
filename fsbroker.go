@@ -1,6 +1,7 @@
 package fsbroker
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -133,6 +134,7 @@ func (b *FSBroker) eventloop() {
 		select {
 		case event := <-b.events:
 			// Add the event to the queue for grouping
+			fmt.Println("Adding event to queue", event)
 			eventQueue = append(eventQueue, event)
 
 		case <-ticker.C:
@@ -159,6 +161,13 @@ func (b *FSBroker) eventloop() {
 					b.handleEvent(action)
 					processedPaths[action.Signature()] = true
 				case Create:
+					// If a directory is created, add a watch
+					if b.watchrecursive {
+						info, err := os.Stat(action.Path)
+						if err == nil && info.IsDir() {
+							b.AddWatch(action.Path)
+						}
+					}
 					// Check if there's a Rename event for the same path within the queue
 					isRename := false
 					for _, relatedrename := range eventQueue {
@@ -173,13 +182,6 @@ func (b *FSBroker) eventloop() {
 						}
 					}
 					if !isRename {
-						// If a directory is created, add a watch
-						if b.watchrecursive {
-							info, err := os.Stat(action.Path)
-							if err == nil && info.IsDir() {
-								b.AddWatch(action.Path)
-							}
-						}
 						// Process the Create event normally
 						b.handleEvent(action)
 						processedPaths[action.Signature()] = true
