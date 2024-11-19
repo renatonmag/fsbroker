@@ -1,7 +1,6 @@
 package fsbroker
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,7 +133,7 @@ func (b *FSBroker) eventloop() {
 		select {
 		case event := <-b.events:
 			// Add the event to the queue for grouping
-			fmt.Println("Adding event to queue", event)
+			// fmt.Println("Adding event to queue", event)
 			eventQueue = append(eventQueue, event)
 
 		case <-ticker.C:
