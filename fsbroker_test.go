@@ -9,18 +9,12 @@ import (
 
 // TestNewFSBroker ensures the broker initializes correctly.
 func TestNewFSBroker(t *testing.T) {
-	broker, err := NewFSBroker(300*time.Millisecond, true)
+  config := DefaultFSConfig()
+	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 	defer broker.Stop()
-
-	if broker.timeout != 300*time.Millisecond {
-		t.Errorf("Expected timeout to be 300ms, got %v", broker.timeout)
-	}
-	if broker.filtersys != true {
-		t.Errorf("Expected ignoreSysFiles to be true, got %v", broker.filtersys)
-	}
 }
 
 // TestAddRecursiveWatch verifies recursive watch on directories.
@@ -31,8 +25,8 @@ func TestAddRecursiveWatch(t *testing.T) {
 	if err := os.Mkdir(subDir, 0755); err != nil {
 		t.Fatalf("Failed to create subdir: %v", err)
 	}
-
-	broker, err := NewFSBroker(300*time.Millisecond, true)
+  config := DefaultFSConfig()
+	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -53,7 +47,8 @@ func TestAddRecursiveWatch(t *testing.T) {
 
 // TestFilterSysFiles verifies filtering system files based on OS type.
 func TestFilterSysFiles(t *testing.T) {
-	broker, err := NewFSBroker(300*time.Millisecond, true)
+  config := DefaultFSConfig()
+	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -78,7 +73,8 @@ func TestFilterSysFiles(t *testing.T) {
 
 // TestEventLoop verifies event deduplication and handling
 func TestEventLoop(t *testing.T) {
-	broker, err := NewFSBroker(300*time.Millisecond, true)
+  config := DefaultFSConfig()
+	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}

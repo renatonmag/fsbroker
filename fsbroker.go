@@ -11,6 +11,20 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+type FSConfig struct {
+	Timeout             time.Duration // duration to wait for events to be grouped and processed
+	IgnoreSysFiles      bool // ignore common system files and directories
+	DarwinChmodAsModify bool // treat chmod events on empty files as modify events on macOS
+}
+
+func DefaultFSConfig() *FSConfig {
+  return &FSConfig{
+    Timeout:             300 * time.Millisecond,
+    IgnoreSysFiles:      true,
+    DarwinChmodAsModify: true,
+  }
+}
+
 // FSBroker collects fsnotify events, groups them, dedupes them, and processes them as a single event.
 type FSBroker struct {
 	watcher        *fsnotify.Watcher
@@ -21,15 +35,14 @@ type FSBroker struct {
 	emitch         chan *FSEvent // emitted events channel, sends FSevent to the user after deduplication, grouping, and processing
 	errors         chan error
 	quit           chan struct{}
-	timeout        time.Duration
-	filtersys      bool
+  config        *FSConfig
 	Filter         func(*FSEvent) bool
 }
 
 // NewFSBroker creates a new FSBroker instance.
 // timeout is the duration to wait for events to be grouped and processed.
 // ignoreSysFiles will ignore common system files and directories.
-func NewFSBroker(timeout time.Duration, ignoreSysFiles bool) (*FSBroker, error) {
+func NewFSBroker(config *FSConfig) (*FSBroker, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -43,8 +56,7 @@ func NewFSBroker(timeout time.Duration, ignoreSysFiles bool) (*FSBroker, error) 
 		emitch:         make(chan *FSEvent, 0),
 		errors:         make(chan error),
 		quit:           make(chan struct{}),
-		timeout:        timeout,
-		filtersys:      ignoreSysFiles,
+    config:         config,
 	}, nil
 }
 
@@ -126,7 +138,7 @@ func (b *FSBroker) RemoveWatch(path string) {
 func (b *FSBroker) eventloop() {
 	eventQueue := make([]*FSEvent, 0) // queue of events to be processed, gets cleared every tick
 
-	ticker := time.NewTicker(b.timeout)
+	ticker := time.NewTicker(b.config.Timeout)
 	defer ticker.Stop()
 
 	for {
@@ -217,7 +229,7 @@ func (b *FSBroker) Stop() {
 
 // AddEvent queues a new file system event into the broker.
 func (b *FSBroker) addEvent(op fsnotify.Op, name string) {
-	if b.filtersys {
+	if b.config.IgnoreSysFiles {
 		switch runtime.GOOS {
 		case "linux":
 			if isLinuxSystemFile(name) {
@@ -235,7 +247,16 @@ func (b *FSBroker) addEvent(op fsnotify.Op, name string) {
 	}
 
 	eventType := mapOpToEventType(op)
+
 	event := NewFSEvent(eventType, name, time.Now())
+
+	// Handle case where writing empty file in macOS results in no modify event, but only in chmod event
+	if b.config.DarwinChmodAsModify && runtime.GOOS == "darwin" && eventType == Chmod {
+		stat, err := os.Stat(name)
+		if err == nil && stat.Size() == 0 {
+			event = NewFSEvent(Modify, name, time.Now()) // Here we are assuming that the file was modified (just because it is empty and had a chmod event)
+		}
+	}
 
 	if b.Filter != nil && b.Filter(event) {
 		return
@@ -299,6 +320,8 @@ func mapOpToEventType(op fsnotify.Op) EventType {
 		return Rename
 	case op&fsnotify.Remove == fsnotify.Remove:
 		return Remove
+	case op&fsnotify.Chmod == fsnotify.Chmod:
+		return Chmod
 	default:
 		return -1 // Unknown event
 	}
