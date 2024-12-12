@@ -17,6 +17,9 @@ FSBroker allows you to watch for changes in the file system and handle events su
 - Recursively add directories to the watch list
 - Apply custom filters while pre-processing events
 
+## Changelog
+- (New v0.1.3) Fix a problem where fsnotify would not detect file changes on macOS if the file was cleared.
+
 ## Installation
 
 To install FS Broker, use `go get`:
