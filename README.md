@@ -40,7 +40,8 @@ import (
 )
 
 func main() {
-	broker, err := fsbroker.NewFSBroker(300*time.Millisecond, true)
+    config := DefaultFSConfig()
+	broker, err := fsbroker.NewFSBroker(config)
 	if err != nil {
 		log.Fatalf("error creating FS Broker: %v", err)
 	}
