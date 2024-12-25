@@ -12,7 +12,7 @@ const (
 	Modify
 	Rename
 	Remove
-  Chmod
+	Chmod
 )
 
 func (t *EventType) String() string {
@@ -25,8 +25,8 @@ func (t *EventType) String() string {
 		return "Rename"
 	case Remove:
 		return "Remove"
-  case Chmod:
-    return "Chmod"
+	case Chmod:
+		return "Chmod"
 	default:
 		return "Unknown"
 	}
