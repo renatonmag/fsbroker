@@ -12,12 +12,16 @@ FSBroker allows you to watch for changes in the file system and handle events su
 ## Features
 
 - Deduplicate similar "Write" events which happen in quick succession and present them as a single unit
-- Detect proper "Rename" events, providing the old and new paths
+- Detect proper "Rename" events, providing the old and new paths (macOS and Linux only)
+- Detect proper "Remove" events in cases where the file is moved (i.e. renamed) to a directory that is outside the watch directory
+- Detect proper "Remove" events in which operating systems would emit as "Rename" because they are moved to a hidden trash directory
 - Exclude common system files and directories
 - Recursively add directories to the watch list
 - Apply custom filters while pre-processing events
 
 ## Changelog
+- (New x0.1.4) Fix a bug where multiple consecutive file creations would not be detected on Windows.
+- (New x0.1.4) Introduce the ability to interpret file moves/renames as deletes in cases where its appropriate.
 - (New v0.1.3) Fix a problem where fsnotify would not detect file changes on macOS if the file was cleared.
 
 ## Installation

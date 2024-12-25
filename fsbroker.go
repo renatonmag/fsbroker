@@ -13,16 +13,16 @@ import (
 
 type FSConfig struct {
 	Timeout             time.Duration // duration to wait for events to be grouped and processed
-	IgnoreSysFiles      bool // ignore common system files and directories
-	DarwinChmodAsModify bool // treat chmod events on empty files as modify events on macOS
+	IgnoreSysFiles      bool          // ignore common system files and directories
+	DarwinChmodAsModify bool          // treat chmod events on empty files as modify events on macOS
 }
 
 func DefaultFSConfig() *FSConfig {
-  return &FSConfig{
-    Timeout:             300 * time.Millisecond,
-    IgnoreSysFiles:      true,
-    DarwinChmodAsModify: true,
-  }
+	return &FSConfig{
+		Timeout:             300 * time.Millisecond,
+		IgnoreSysFiles:      true,
+		DarwinChmodAsModify: true,
+	}
 }
 
 // FSBroker collects fsnotify events, groups them, dedupes them, and processes them as a single event.
@@ -35,7 +35,7 @@ type FSBroker struct {
 	emitch         chan *FSEvent // emitted events channel, sends FSevent to the user after deduplication, grouping, and processing
 	errors         chan error
 	quit           chan struct{}
-  config        *FSConfig
+	config         *FSConfig
 	Filter         func(*FSEvent) bool
 }
 
@@ -53,10 +53,10 @@ func NewFSBroker(config *FSConfig) (*FSBroker, error) {
 		watched:        make(map[string]bool),
 		watchrecursive: false,
 		events:         make(chan *FSEvent, 100),
-		emitch:         make(chan *FSEvent, 0),
+		emitch:         make(chan *FSEvent),
 		errors:         make(chan error),
 		quit:           make(chan struct{}),
-    config:         config,
+		config:         config,
 	}, nil
 }
 
@@ -136,87 +136,134 @@ func (b *FSBroker) RemoveWatch(path string) {
 
 // eventloop starts the broker, grouping and interpreting events as a single action.
 func (b *FSBroker) eventloop() {
-	eventQueue := make([]*FSEvent, 0) // queue of events to be processed, gets cleared every tick
+	eventQueue := NewEventQueue() // queue of events to be processed, gets cleared every tick
 
 	ticker := time.NewTicker(b.config.Timeout)
+	tickerLock := sync.Mutex{}
 	defer ticker.Stop()
 
 	for {
 		select {
 		case event := <-b.events:
 			// Add the event to the queue for grouping
-			// fmt.Println("Adding event to queue", event)
-			eventQueue = append(eventQueue, event)
+			eventQueue.Push(event)
 
 		case <-ticker.C:
-			// Process grouped events, detecting related Create and Rename events
-			processedPaths := make(map[string]bool)
-
-			for _, action := range eventQueue {
-				// Ignore already processed paths
-				if processedPaths[action.Signature()] {
-					continue
-				}
-
-				switch action.Type {
-				case Remove:
-					// Check if there's any preceeding event for the same path within the queue, ignore it and only raise the remove event
-					for _, relatedAction := range eventQueue {
-						if relatedAction.Path == action.Path && relatedAction.Timestamp.Before(action.Timestamp) {
-							processedPaths[relatedAction.Signature()] = true
-						}
-					}
-					// If a directory is removed, remove the watch
-					b.RemoveWatch(action.Path)
-					// Process the Remove event normally
-					b.handleEvent(action)
-					processedPaths[action.Signature()] = true
-				case Create:
-					// If a directory is created, add a watch
-					if b.watchrecursive {
-						info, err := os.Stat(action.Path)
-						if err == nil && info.IsDir() {
-							b.AddWatch(action.Path)
-						}
-					}
-					// Check if there's a Rename event for the same path within the queue
-					isRename := false
-					for _, relatedrename := range eventQueue {
-						if filepath.Dir(relatedrename.Path) == filepath.Dir(action.Path) && relatedrename.Type == Rename {
-							result := NewFSEvent(Rename, action.Path, action.Timestamp)
-							result.Properties["OldPath"] = relatedrename.Path
-							b.handleEvent(result)
-							processedPaths[action.Signature()] = true
-							processedPaths[relatedrename.Signature()] = true
-							isRename = true
-							break
-						}
-					}
-					if !isRename {
-						// Process the Create event normally
-						b.handleEvent(action)
-						processedPaths[action.Signature()] = true
-					}
-				case Modify:
-					// Check if there are multiple save events for the same path within the queue, treat them as a single Modify event
-					latestModify := action
-					for _, relatedModify := range eventQueue {
-						if relatedModify.Path == action.Path && relatedModify.Type == Modify && relatedModify.Timestamp.After(latestModify.Timestamp) {
-							latestModify = relatedModify
-						}
-						processedPaths[relatedModify.Signature()] = true
-					}
-					// Process the latest Modify event
-					b.handleEvent(latestModify)
-					processedPaths[latestModify.Signature()] = true
-				default:
-					// Ignore other event types
-				}
-			}
-			eventQueue = []*FSEvent{} // Clear the event queue after processing
+			b.resolveAndHandle(eventQueue, &tickerLock)
 
 		case <-b.quit:
 			return
+		}
+	}
+}
+
+func (b *FSBroker) resolveAndHandle(eventQueue *EventQueue, tickerLock *sync.Mutex) {
+	// We only want one instance of this method to run at a time, so we lock it
+	if !tickerLock.TryLock() {
+		return
+	}
+	defer tickerLock.Unlock()
+	// Process grouped events, detecting related Create and Rename events
+	processedPaths := make(map[string]bool)
+	eventList := eventQueue.List()
+
+	if len(eventList) == 0 {
+		return
+	}
+
+	//Pop event from queue, and stop the loop when it's empty
+	for action := eventQueue.Pop(); action != nil; action = eventQueue.Pop() {
+		// Ignore already processed paths
+		if processedPaths[action.Signature()] {
+			continue
+		}
+
+		switch action.Type {
+		case Remove:
+			// TODO: On Windows, a rename causes a remove event followed by a create event.
+			// Unfortunately, there is no way we can handle it except two distinct events
+			// I have ideas that involve looking at file properties, and try to find remove and create events which are close to each other, but it's not reliable
+
+			// Check if there's any other event for the same path within the queue, ignore it and only raise the remove event
+			for _, relatedAction := range eventList {
+				if relatedAction.Path == action.Path && relatedAction.Timestamp.Before(action.Timestamp) {
+					processedPaths[relatedAction.Signature()] = true
+				}
+			}
+			// If a directory is removed, remove the watch
+			b.RemoveWatch(action.Path)
+			// Process the Remove event normally
+			b.handleEvent(action)
+			processedPaths[action.Signature()] = true
+		case Create:
+			// If a directory is created, add a watch
+			if b.watchrecursive {
+				info, err := os.Stat(action.Path)
+				if err == nil && info.IsDir() {
+					b.AddWatch(action.Path)
+				}
+			}
+			// Check if there's a Rename event for the same path within the queue
+			isRename := false
+			for _, relatedrename := range eventList {
+				if filepath.Dir(relatedrename.Path) == filepath.Dir(action.Path) && relatedrename.Type == Rename {
+					result := NewFSEvent(Rename, action.Path, action.Timestamp)
+					result.Properties["OldPath"] = relatedrename.Path
+					b.handleEvent(result)
+					processedPaths[action.Signature()] = true
+					processedPaths[relatedrename.Signature()] = true
+					isRename = true
+					break
+				}
+			}
+			if !isRename {
+				// Process the Create event normally
+				b.handleEvent(action)
+				processedPaths[action.Signature()] = true
+			}
+		case Rename:
+			// Rename could be called if the item is moved outside the bound of watch directories, or moved to a trash directory
+			// In both of these cases, we should remove the watch and emit a Remove event
+			// We do that by checking if the file actually exists, if it doesn't, we'll emit a Remove event
+			// If the item is moved to another directory within watched directories, we'll rely on the associated Create event to detect it
+			if _, err := os.Stat(action.Path); os.IsNotExist(err) {
+				// If a directory is removed, remove the watch
+				b.RemoveWatch(action.Path)
+				// Create and process the Remove event normally
+				remove := NewFSEvent(Remove, action.Path, action.Timestamp)
+				b.handleEvent(remove)
+				processedPaths[action.Signature()] = true
+				// Then we'll loop on all other preceding captured actions to ignore them, they should be now irrelevant
+				for _, relatedAction := range eventList {
+					if relatedAction.Path == action.Path && relatedAction.Timestamp.Before(action.Timestamp) {
+						processedPaths[relatedAction.Signature()] = true
+					}
+				}
+			}
+		case Modify:
+			// Check if there are multiple save events for the same path within the queue, treat them as a single Modify event
+			latestModify := action
+			for _, relatedModify := range eventList {
+				if relatedModify.Path == action.Path && relatedModify.Type == Modify && relatedModify.Timestamp.After(latestModify.Timestamp) {
+					latestModify = relatedModify
+				}
+				processedPaths[relatedModify.Signature()] = true
+			}
+			// Process the latest Modify event
+			b.handleEvent(latestModify)
+			processedPaths[latestModify.Signature()] = true
+		case Chmod:
+			// Handle case where writing empty file in macOS results in no modify event, but only in chmod event
+			if b.config.DarwinChmodAsModify && runtime.GOOS == "darwin" && action.Type == Chmod {
+				stat, err := os.Stat(action.Path)
+				if err == nil && stat.Size() == 0 {
+          // Here we are assuming that the file was modified (just because it is empty and had a chmod event)
+          modified := NewFSEvent(Modify, action.Path, action.Timestamp)
+          b.handleEvent(modified)
+        }
+			}
+		default:
+			// Ignore other event types
 		}
 	}
 }
@@ -249,14 +296,6 @@ func (b *FSBroker) addEvent(op fsnotify.Op, name string) {
 	eventType := mapOpToEventType(op)
 
 	event := NewFSEvent(eventType, name, time.Now())
-
-	// Handle case where writing empty file in macOS results in no modify event, but only in chmod event
-	if b.config.DarwinChmodAsModify && runtime.GOOS == "darwin" && eventType == Chmod {
-		stat, err := os.Stat(name)
-		if err == nil && stat.Size() == 0 {
-			event = NewFSEvent(Modify, name, time.Now()) // Here we are assuming that the file was modified (just because it is empty and had a chmod event)
-		}
-	}
 
 	if b.Filter != nil && b.Filter(event) {
 		return
