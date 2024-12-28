@@ -15,6 +15,7 @@ type FSConfig struct {
 	Timeout             time.Duration // duration to wait for events to be grouped and processed
 	IgnoreSysFiles      bool          // ignore common system files and directories
 	DarwinChmodAsModify bool          // treat chmod events on empty files as modify events on macOS
+	EmitChmod           bool          // emit chmod events
 }
 
 func DefaultFSConfig() *FSConfig {
@@ -22,6 +23,7 @@ func DefaultFSConfig() *FSConfig {
 		Timeout:             300 * time.Millisecond,
 		IgnoreSysFiles:      true,
 		DarwinChmodAsModify: true,
+		EmitChmod:           false,
 	}
 }
 
@@ -241,26 +243,42 @@ func (b *FSBroker) resolveAndHandle(eventQueue *EventQueue, tickerLock *sync.Mut
 				}
 			}
 		case Modify:
+			// First, dedup modify events
 			// Check if there are multiple save events for the same path within the queue, treat them as a single Modify event
 			latestModify := action
 			for _, relatedModify := range eventList {
 				if relatedModify.Path == action.Path && relatedModify.Type == Modify && relatedModify.Timestamp.After(latestModify.Timestamp) {
 					latestModify = relatedModify
 				}
-				processedPaths[relatedModify.Signature()] = true
 			}
-			// Process the latest Modify event
-			b.handleEvent(latestModify)
-			processedPaths[latestModify.Signature()] = true
+
+			// Then check if there is a Create event for the same path, ignore the Modify event, we'll let the Create event handle it
+			// This handles the case where Windows/Linux emits a Create event followed by a Modify event for a new file
+			foundCreated := false
+			for _, relatedCreate := range eventList {
+				if relatedCreate.Path == action.Path && relatedCreate.Type == Create {
+					processedPaths[latestModify.Signature()] = true
+					foundCreated = true
+					break
+				}
+			}
+
+			// Otherwise, Process the latest Modify event
+			if !foundCreated {
+				b.handleEvent(latestModify)
+				processedPaths[latestModify.Signature()] = true
+			}
 		case Chmod:
 			// Handle case where writing empty file in macOS results in no modify event, but only in chmod event
 			if b.config.DarwinChmodAsModify && runtime.GOOS == "darwin" && action.Type == Chmod {
 				stat, err := os.Stat(action.Path)
 				if err == nil && stat.Size() == 0 {
-          // Here we are assuming that the file was modified (just because it is empty and had a chmod event)
-          modified := NewFSEvent(Modify, action.Path, action.Timestamp)
-          b.handleEvent(modified)
-        }
+					// Here we are assuming that the file was modified (just because it is empty and had a chmod event)
+					modified := NewFSEvent(Modify, action.Path, action.Timestamp)
+					b.handleEvent(modified)
+				}
+			} else if b.config.EmitChmod {
+				b.handleEvent(action)
 			}
 		default:
 			// Ignore other event types
