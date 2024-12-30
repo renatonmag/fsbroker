@@ -1,6 +1,8 @@
 # FSBroker
+
 FSBroker is a file system event broker library for Go. All the heavy lifting is thankfully done by [fsnotify](https://github.com/fsnotify/fsnotify).
 While fsnotify is great, there are a few downsides which I find myself lacking in every project I use it in:
+
 - I need to deduplicate events that happen in quick succession. An example would be the user repeatedly saving a file; I want to treat those bursts of file saves as an individual unit.
 - FSNotify does not detect the "rename" properly, simply because operating systems handle renames in an obtuse way. For instance, on most operating systems, there will be a Create event (with the new name of the file) then a Rename event (with the old name of the file). It is difficult in my logic to correlate those two events together.
 - I need to exclude common system files from raising events, such as ".DS_Store" on MacOS, or "thumbs.db" on Windows.
@@ -20,6 +22,8 @@ FSBroker allows you to watch for changes in the file system and handle events su
 - Apply custom filters while pre-processing events
 
 ## Changelog
+
+- (New x0.1.5) Fix more bugs, added the option to emit chmod events (defaults to false).
 - (New x0.1.4) Fix a bug where multiple consecutive file creations would not be detected on Windows.
 - (New x0.1.4) Introduce the ability to interpret file moves/renames as deletes in cases where its appropriate.
 - (New v0.1.3) Fix a problem where fsnotify would not detect file changes on macOS if the file was cleared.
@@ -78,7 +82,9 @@ broker.Filter = func(event *FSEvent) bool {
     return event.Type != Remove // Filters out any event that is not Remove
 }
 ```
+
 or
+
 ```go
 broker.Filter = func(event *FSEvent) bool {
     return event.Path == "/some/excluded/path" // Filters out any event which is related to this path
@@ -87,12 +93,20 @@ broker.Filter = func(event *FSEvent) bool {
 
 ## API
 
-### `NewFSBroker(interval time.Duration, ignoreSysFiles bool) (*FSBroker, error)`
+### `DefaultFSConfig() *FSConfig`
+
+Creates a default FS Config instance with these default settings:
+
+- Timeout:             300 * time.Millisecond
+- IgnoreSysFiles:      true
+- DarwinChmodAsModify: true
+- EmitChmod:           false
+
+### `NewFSBroker(config *FSConfig) (*FSBroker, error)`
 
 Creates a new FS Broker instance.
 
-- `interval`: The polling interval for checking file system changes.
-- `ignoreSysFiles`: Whether to ignore common system files and directories.
+- `config`: FS Config instance.
 
 ### `(*FSBroker) AddRecursiveWatch(path string) error`
 
