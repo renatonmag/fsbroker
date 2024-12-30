@@ -51,27 +51,27 @@ import (
 )
 
 func main() {
-    config := fsbroker.DefaultFSConfig()
+	config := fsbroker.DefaultFSConfig()
 	broker, err := fsbroker.NewFSBroker(config)
 	if err != nil {
-	    log.Fatalf("error creating FS Broker: %v", err)
-    }
+		log.Fatalf("error creating FS Broker: %v", err)
+	}
 	defer broker.Stop()
 
 	if err := broker.AddRecursiveWatch("watch"); err != nil {
-	    log.Printf("error adding watch: %v", err)
-    }
+		log.Printf("error adding watch: %v", err)
+	}
 
 	broker.Start()
 
 	for {
-	   select {
-	   case event := <-broker.Next():
-	   	log.Printf("fs event has occurred: type=%s, path=%s, timestamp=%s, properties=%v", event.Type.String(), event.Path, event.Timestamp, event.Properties)
-	   case error := <-broker.Error():
-	   	log.Printf("an error has occurred: %v", error)
-	   }
-    }	
+		select {
+		case event := <-broker.Next():
+			log.Printf("fs event has occurred: type=%s, path=%s, timestamp=%s, properties=%v", event.Type.String(), event.Path, event.Timestamp, event.Properties)
+		case error := <-broker.Error():
+			log.Printf("an error has occurred: %v", error)
+		}
+	}
 }
 ```
 
