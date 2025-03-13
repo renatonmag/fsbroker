@@ -3,13 +3,14 @@ package fsbroker
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
 // TestNewFSBroker ensures the broker initializes correctly.
 func TestNewFSBroker(t *testing.T) {
-  config := DefaultFSConfig()
+	config := DefaultFSConfig()
 	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -25,7 +26,7 @@ func TestAddRecursiveWatch(t *testing.T) {
 	if err := os.Mkdir(subDir, 0755); err != nil {
 		t.Fatalf("Failed to create subdir: %v", err)
 	}
-  config := DefaultFSConfig()
+	config := DefaultFSConfig()
 	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -47,7 +48,7 @@ func TestAddRecursiveWatch(t *testing.T) {
 
 // TestFilterSysFiles verifies filtering system files based on OS type.
 func TestFilterSysFiles(t *testing.T) {
-  config := DefaultFSConfig()
+	config := DefaultFSConfig()
 	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -73,7 +74,7 @@ func TestFilterSysFiles(t *testing.T) {
 
 // TestEventLoop verifies event deduplication and handling
 func TestEventLoop(t *testing.T) {
-  config := DefaultFSConfig()
+	config := DefaultFSConfig()
 	broker, err := NewFSBroker(config)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -99,5 +100,153 @@ func TestEventLoop(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Error("Timed out waiting for event deduplication")
+	}
+}
+
+// TestIsSystemFile tests the isSystemFile function for the current platform.
+func TestIsSystemFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		// Common test cases for all platforms
+		{"Regular file", "/path/to/regular.txt", false},
+		{"Regular directory", "/path/to/regular", false},
+	}
+
+	// Platform-specific test cases
+	switch runtime.GOOS {
+	case "windows":
+		windowsTests := []struct {
+			name     string
+			path     string
+			expected bool
+		}{
+			{"Desktop.ini", "C:\\Users\\test\\Desktop.ini", true},
+			{"Thumbs.db", "C:\\Users\\test\\Thumbs.db", true},
+			{"Recycle Bin", "C:\\$Recycle.bin", true},
+			{"System Volume Information", "D:\\System Volume Information", true},
+		}
+		for _, tt := range windowsTests {
+			tests = append(tests, struct {
+				name     string
+				path     string
+				expected bool
+			}{tt.name, tt.path, tt.expected})
+		}
+	case "darwin":
+		macTests := []struct {
+			name     string
+			path     string
+			expected bool
+		}{
+			{".DS_Store", "/Users/test/.DS_Store", true},
+			{".Trashes", "/Users/test/.Trashes", true},
+			{"._ResourceFork", "/Users/test/._Document", true},
+			{".AppleDouble", "/Users/test/.AppleDouble", true},
+		}
+		for _, tt := range macTests {
+			tests = append(tests, struct {
+				name     string
+				path     string
+				expected bool
+			}{tt.name, tt.path, tt.expected})
+		}
+	case "linux":
+		linuxTests := []struct {
+			name     string
+			path     string
+			expected bool
+		}{
+			{".bash_history", "/home/user/.bash_history", true},
+			{".config", "/home/user/.config", true},
+			{".goutputstream", "/tmp/.goutputstream-XYZ", true},
+			{".trash", "/home/user/.trash-1000", true},
+		}
+		for _, tt := range linuxTests {
+			tests = append(tests, struct {
+				name     string
+				path     string
+				expected bool
+			}{tt.name, tt.path, tt.expected})
+		}
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isSystemFile(tt.path)
+			if result != tt.expected {
+				t.Errorf("isSystemFile(%q) = %v, want %v", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestIsHiddenFile tests the isHiddenFile function for the current platform.
+func TestIsHiddenFile(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+
+	// Create a hidden file (platform-specific)
+	var hiddenFilePath string
+	var regularFilePath string
+
+	switch runtime.GOOS {
+	case "windows":
+		// On Windows, we can't easily create a hidden file in tests
+		// So we'll just test the function with known paths
+		hiddenFilePath = filepath.Join(tempDir, "hidden.txt")
+		regularFilePath = filepath.Join(tempDir, "regular.txt")
+
+		// Create the files
+		if err := os.WriteFile(hiddenFilePath, []byte("hidden"), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+		if err := os.WriteFile(regularFilePath, []byte("regular"), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		// Note: On Windows, we can't set the hidden attribute in a cross-platform way
+		// So we'll just check that the function doesn't error
+		_, err := isHiddenFile(hiddenFilePath)
+		if err != nil {
+			t.Errorf("isHiddenFile(%q) returned error: %v", hiddenFilePath, err)
+		}
+
+		_, err = isHiddenFile(regularFilePath)
+		if err != nil {
+			t.Errorf("isHiddenFile(%q) returned error: %v", regularFilePath, err)
+		}
+	default:
+		// On Unix-like systems, hidden files start with a dot
+		hiddenFilePath = filepath.Join(tempDir, ".hidden")
+		regularFilePath = filepath.Join(tempDir, "regular")
+
+		// Create the files
+		if err := os.WriteFile(hiddenFilePath, []byte("hidden"), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+		if err := os.WriteFile(regularFilePath, []byte("regular"), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		// Test hidden file
+		hidden, err := isHiddenFile(hiddenFilePath)
+		if err != nil {
+			t.Errorf("isHiddenFile(%q) returned error: %v", hiddenFilePath, err)
+		}
+		if !hidden {
+			t.Errorf("isHiddenFile(%q) = %v, want true", hiddenFilePath, hidden)
+		}
+
+		// Test regular file
+		hidden, err = isHiddenFile(regularFilePath)
+		if err != nil {
+			t.Errorf("isHiddenFile(%q) returned error: %v", regularFilePath, err)
+		}
+		if hidden {
+			t.Errorf("isHiddenFile(%q) = %v, want false", regularFilePath, hidden)
+		}
 	}
 }
