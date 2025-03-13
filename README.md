@@ -23,10 +23,10 @@ FSBroker allows you to watch for changes in the file system and handle events su
 
 ## Changelog
 
-- (New x0.1.6) Added the option to ignore hidden files.
-- (New x0.1.5) Fix more bugs, added the option to emit chmod events (defaults to false).
-- (New x0.1.4) Fix a bug where multiple consecutive file creations would not be detected on Windows.
-- (New x0.1.4) Introduce the ability to interpret file moves/renames as deletes in cases where its appropriate.
+- (New v0.1.6) Added the option to ignore hidden files.
+- (New v0.1.5) Fix more bugs, added the option to emit chmod events (defaults to false).
+- (New v0.1.4) Fix a bug where multiple consecutive file creations would not be detected on Windows.
+- (New v0.1.4) Introduce the ability to interpret file moves/renames as deletes in cases where its appropriate.
 - (New v0.1.3) Fix a problem where fsnotify would not detect file changes on macOS if the file was cleared.
 
 ## Installation
