@@ -1,6 +1,8 @@
 package fsbroker
 
 import (
+	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type FSConfig struct {
@@ -16,6 +19,7 @@ type FSConfig struct {
 	IgnoreHiddenFiles   bool          // ignore hidden files
 	DarwinChmodAsModify bool          // treat chmod events on empty files as modify events on macOS
 	EmitChmod           bool          // emit chmod events
+	IgnorePath          string        // .gitignore path
 }
 
 func DefaultFSConfig() *FSConfig {
@@ -25,6 +29,7 @@ func DefaultFSConfig() *FSConfig {
 		IgnoreHiddenFiles:   true,
 		DarwinChmodAsModify: true,
 		EmitChmod:           false,
+		IgnorePath:          "",
 	}
 }
 
@@ -40,6 +45,7 @@ type FSBroker struct {
 	quit           chan struct{}
 	config         *FSConfig
 	Filter         func(*FSEvent) bool
+	ignore         *IgnoreService
 }
 
 // NewFSBroker creates a new FSBroker instance.
@@ -51,6 +57,11 @@ func NewFSBroker(config *FSConfig) (*FSBroker, error) {
 		return nil, err
 	}
 
+	var ignore *IgnoreService
+	if config.IgnorePath != "" {
+		ignore = NewIgnoreService(config.IgnorePath)
+	}
+
 	return &FSBroker{
 		watcher:        watcher,
 		watched:        make(map[string]bool),
@@ -60,6 +71,7 @@ func NewFSBroker(config *FSConfig) (*FSBroker, error) {
 		errors:         make(chan error),
 		quit:           make(chan struct{}),
 		config:         config,
+		ignore:         ignore,
 	}, nil
 }
 
@@ -98,7 +110,10 @@ func (b *FSBroker) AddRecursiveWatch(path string) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		matches := b.ignore.MatchesPath(p)
+		fmt.Println("matches", matches)
+		fmt.Println("p", p)
+		if info.IsDir() && !matches {
 			if err := b.AddWatch(p); err != nil {
 				return err
 			}
@@ -343,4 +358,38 @@ func mapOpToEventType(op fsnotify.Op) EventType {
 // handleEvent sends the event to the user after deduplication, grouping, and processing.
 func (b *FSBroker) handleEvent(event *FSEvent) {
 	b.emitch <- event
+}
+
+type IgnoreService struct {
+	filePath string
+	matcher  *ignore.GitIgnore
+}
+
+func NewIgnoreService(filePath string) *IgnoreService {
+	ignore := &IgnoreService{
+		filePath: filePath,
+	}
+	ignore.CompileIgnoreLines(ignore.filePath)
+	return ignore
+}
+func (i *IgnoreService) CompileIgnoreLines(filePath string) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		// If the file doesn't exist, use an empty matcher
+		i.matcher = ignore.CompileIgnoreLines()
+		return
+	}
+	defer file.Close()
+
+	var lines []string
+	var scanner = bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	i.matcher = ignore.CompileIgnoreLines(lines...)
+}
+
+func (i *IgnoreService) MatchesPath(path string) bool {
+	return i.matcher.MatchesPath(path)
 }
