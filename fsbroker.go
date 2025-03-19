@@ -3,10 +3,12 @@ package fsbroker
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -37,6 +39,9 @@ func DefaultFSConfig() *FSConfig {
 type FSBroker struct {
 	watcher        *fsnotify.Watcher
 	watched        map[string]bool
+	watchedInodes  map[uint64]string
+	watchedPaths   map[string]uint64
+	removedInodes  map[uint64]string
 	watchermu      sync.Mutex
 	watchrecursive bool          // watch recursively on directories, set by AddRecursiveWatch
 	events         chan *FSEvent // internal events channel, processes FSevent for every FSNotify Op
@@ -65,6 +70,9 @@ func NewFSBroker(config *FSConfig) (*FSBroker, error) {
 	return &FSBroker{
 		watcher:        watcher,
 		watched:        make(map[string]bool),
+		watchedInodes:  make(map[uint64]string),
+		watchedPaths:   make(map[string]uint64),
+		removedInodes:  make(map[uint64]string),
 		watchrecursive: false,
 		events:         make(chan *FSEvent, 100),
 		emitch:         make(chan *FSEvent),
@@ -111,11 +119,19 @@ func (b *FSBroker) AddRecursiveWatch(path string) error {
 			return err
 		}
 		matches := b.ignore.MatchesPath(p)
-		fmt.Println("matches", matches)
-		fmt.Println("p", p)
-		if info.IsDir() && !matches {
-			if err := b.AddWatch(p); err != nil {
+		if !matches {
+			inode, err := GetInode(p)
+			if err != nil {
+				log.Printf("error getting inode: %v", err)
 				return err
+			}
+			b.watchedInodes[inode] = p
+			b.watchedPaths[p] = inode
+
+			if info.IsDir() {
+				if err := b.AddWatch(p); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -136,6 +152,7 @@ func (b *FSBroker) AddWatch(path string) error {
 		return err
 	}
 	b.watched[path] = true
+
 	return nil
 }
 
@@ -150,6 +167,7 @@ func (b *FSBroker) RemoveWatch(path string) {
 
 	b.watcher.Remove(path)
 	delete(b.watched, path)
+	delete(b.watchedPaths, path)
 }
 
 // eventloop starts the broker, grouping and interpreting events as a single action.
@@ -208,12 +226,19 @@ func (b *FSBroker) resolveAndHandle(eventQueue *EventQueue, tickerLock *sync.Mut
 					processedPaths[relatedAction.Signature()] = true
 				}
 			}
+			inode, _ := b.getInode(action.Path)
+			b.addRemoved(action.Path, inode)
 			// If a directory is removed, remove the watch
 			b.RemoveWatch(action.Path)
 			// Process the Remove event normally
 			b.handleEvent(action)
 			processedPaths[action.Signature()] = true
 		case Create:
+			matches := b.ignore.MatchesPath(action.Path)
+			if !matches {
+				b.setInode(action.Path)
+			}
+
 			// If a directory is created, add a watch
 			if b.watchrecursive {
 				info, err := os.Stat(action.Path)
@@ -221,6 +246,14 @@ func (b *FSBroker) resolveAndHandle(eventQueue *EventQueue, tickerLock *sync.Mut
 					b.AddWatch(action.Path)
 				}
 			}
+			// if same inode but different path, it means the file was moved to a different location
+			if b.isMove(action.Path) {
+				b.deleteRemoved(action.Path)
+				result := NewFSEvent(Move, action.Path, action.Timestamp)
+				b.handleEvent(result)
+				return
+			}
+
 			// Check if there's a Rename event for the same path within the queue
 			isRename := false
 			for _, relatedrename := range eventList {
@@ -240,15 +273,19 @@ func (b *FSBroker) resolveAndHandle(eventQueue *EventQueue, tickerLock *sync.Mut
 				processedPaths[action.Signature()] = true
 			}
 		case Rename:
+			inode, _ := b.getInode(action.Path)
 			// Rename could be called if the item is moved outside the bound of watch directories, or moved to a trash directory
 			// In both of these cases, we should remove the watch and emit a Remove event
 			// We do that by checking if the file actually exists, if it doesn't, we'll emit a Remove event
 			// If the item is moved to another directory within watched directories, we'll rely on the associated Create event to detect it
 			if _, err := os.Stat(action.Path); os.IsNotExist(err) {
+				b.addRemoved(action.Path, inode)
 				// If a directory is removed, remove the watch
 				b.RemoveWatch(action.Path)
 				// Create and process the Remove event normally
 				remove := NewFSEvent(Remove, action.Path, action.Timestamp)
+				remove.Properties["inode"] = fmt.Sprintf("%d", inode)
+
 				b.handleEvent(remove)
 				processedPaths[action.Signature()] = true
 				// Then we'll loop on all other preceding captured actions to ignore them, they should be now irrelevant
@@ -327,14 +364,57 @@ func (b *FSBroker) addEvent(op fsnotify.Op, name string) {
 	}
 
 	eventType := mapOpToEventType(op)
+	inode, ok := b.watchedPaths[name]
+	if !ok {
+		log.Printf("inode not found for path: %s", name)
+	}
 
 	event := NewFSEvent(eventType, name, time.Now())
+	event.Properties["inode"] = fmt.Sprintf("%d", inode)
 
 	if b.Filter != nil && b.Filter(event) {
 		return
 	}
 
 	b.events <- event
+}
+
+func (b *FSBroker) isMove(path string) bool {
+	inode, err := b.getInode(path)
+	if err != nil {
+		return false
+	}
+	fmt.Printf("Checking inode: %d, removedInodes entry: %v\n", inode, b.removedInodes[inode])
+	if _, ok := b.removedInodes[inode]; !ok {
+		return false
+	}
+	return true
+}
+
+func (b *FSBroker) getInode(path string) (uint64, error) {
+	inode, ok := b.watchedPaths[path]
+	if !ok {
+		return 0, fmt.Errorf("inode not found for path: %s", path)
+	}
+	return inode, nil
+}
+
+func (b *FSBroker) setInode(path string) {
+	inode, err := GetInode(path)
+	if err != nil {
+		log.Printf("error getting inode: %v", err)
+		return
+	}
+	b.watchedPaths[path] = inode
+}
+
+func (b *FSBroker) deleteRemoved(path string) {
+	inode, _ := b.getInode(path)
+	delete(b.removedInodes, inode)
+}
+
+func (b *FSBroker) addRemoved(path string, inode uint64) {
+	b.removedInodes[inode] = path
 }
 
 // mapOpToEventType maps fsnotify.Op to EventType.
@@ -392,4 +472,18 @@ func (i *IgnoreService) CompileIgnoreLines(filePath string) {
 
 func (i *IgnoreService) MatchesPath(path string) bool {
 	return i.matcher.MatchesPath(path)
+}
+
+func GetInode(path string) (uint64, error) {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return 2, err
+	}
+
+	stat, ok := fileInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 2, fmt.Errorf("failed to cast file info to Stat_t")
+	}
+
+	return stat.Ino, nil
 }
