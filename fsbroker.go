@@ -248,8 +248,10 @@ func (b *FSBroker) resolveAndHandle(eventQueue *EventQueue, tickerLock *sync.Mut
 			}
 			// if same inode but different path, it means the file was moved to a different location
 			if b.isMove(action.Path) {
+				prevPath := b.prevPathbyInode(action.Path)
 				b.deleteRemoved(action.Path)
 				result := NewFSEvent(Move, action.Path, action.Timestamp)
+				result.Properties["OldPath"] = prevPath
 				b.handleEvent(result)
 				return
 			}
@@ -415,6 +417,15 @@ func (b *FSBroker) deleteRemoved(path string) {
 
 func (b *FSBroker) addRemoved(path string, inode uint64) {
 	b.removedInodes[inode] = path
+}
+
+func (b *FSBroker) prevPathbyInode(path string) string {
+	inode, _ := b.getInode(path)
+	prevPath, ok := b.removedInodes[inode]
+	if !ok {
+		return ""
+	}
+	return prevPath
 }
 
 // mapOpToEventType maps fsnotify.Op to EventType.
