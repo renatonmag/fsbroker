@@ -1,4 +1,4 @@
-module github.com/helshabini/fsbroker
+module github.com/renatonmag/fsbroker
 
 go 1.23.2
 
